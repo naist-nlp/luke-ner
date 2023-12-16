@@ -1,0 +1,6 @@
+torch == 2.*
+transformers[torch] == 4.*
+datasets == 2.*
+# packages for `MLukeTokenizer`
+sentencepiece
+protobuf == 3.*
