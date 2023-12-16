@@ -2,7 +2,7 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from datasets import load_dataset
 from datasets.fingerprint import get_temporary_cache_files_directory
@@ -19,6 +19,7 @@ from transformers import (
 )
 
 from data import Collator, Preprocessor
+from training_utils import LoggerCallback, setup_logger
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +44,10 @@ def main(args: Arguments, training_args: TrainingArguments):
     )
     logger.info(f"args: {args}")
     logger.info(f"training args: {training_args}")
+    set_seed(training_args.seed)
 
-    data_files = {}
-    if args.train_file is not None:
-        data_files["train"] = args.train_file
-    if args.validation_file is not None:
-        data_files["validation"] = args.validation_file
-    if args.test_file is not None:
-        data_files["test"] = args.test_file
+    data_files = {k: getattr(args, f"{k}_file") for k in ["train", "validation", "test"]}
+    data_files = {k: v for k, v in data_files.items() if v is not None}
     cache_dir = args.cache_dir or get_temporary_cache_files_directory()
     raw_datasets = load_dataset("json", data_files=data_files, cache_dir=cache_dir)
 
@@ -66,6 +63,7 @@ def main(args: Arguments, training_args: TrainingArguments):
         labels = ["<none>"] + sorted(label_set)
         config.label2id = {label: i for i, label in enumerate(labels)}
         config.id2label = {i: label for i, label in enumerate(labels)}
+        logger.info(f"labels: {labels}")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model,
@@ -83,7 +81,6 @@ def main(args: Arguments, training_args: TrainingArguments):
         max_mention_length=args.max_mention_length,
         pretokenize=args.pretokenize,
     )
-    # print(f"LABELS: {preprocessor.label2id}")
 
     def preprocess(documents):
         features = []
@@ -98,8 +95,6 @@ def main(args: Arguments, training_args: TrainingArguments):
         column_names = next(iter(raw_datasets.values())).column_names
         splits = raw_datasets.map(preprocess, batched=True, remove_columns=column_names)
 
-    set_seed(training_args.seed)
-
     model = LukeForEntitySpanClassification.from_pretrained(args.model, config=config)
 
     trainer = SpanClassificationTraier(
@@ -109,8 +104,7 @@ def main(args: Arguments, training_args: TrainingArguments):
         eval_dataset=splits.get("validation"),
         data_collator=Collator(tokenizer),
     )
-
-    # Add logger callback
+    trainer.add_callback(LoggerCallback(logger))
 
     if training_args.do_train:
         checkpoint = None
@@ -215,34 +209,6 @@ def predict(logits, features, id2label):
             if idx != 0:
                 entities.add((start, end, id2label[idx]))
     return outputs
-
-
-def setup_logger(training_args: TrainingArguments):
-    import sys, datasets, transformers  # isort:skip  # noqa
-
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    if training_args.should_log and training_args.save_strategy != "no":
-        output_dir = Path(training_args.output_dir)
-        output_dir.mkdir(exist_ok=True)
-        handlers.append(logging.FileHandler(output_dir / "main.log"))
-
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=handlers,
-    )
-
-    if training_args.should_log:
-        transformers.utils.logging.set_verbosity_info()
-
-    log_level = training_args.get_process_log_level()
-    transformers.utils.logging.set_verbosity(log_level)
-    transformers.utils.logging.enable_propagation()
-    getattr(transformers.utils.logging, "disable_default_handler", lambda: None)()
-    datasets.utils.logging.set_verbosity(log_level)
-    datasets.utils.logging.enable_propagation()
-    getattr(datasets.utils.logging, "disable_default_handler", lambda: None)()
-    logger.setLevel(log_level)
 
 
 if __name__ == "__main__":
