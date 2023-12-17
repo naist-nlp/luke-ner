@@ -1,6 +1,6 @@
 [tool.ruff]
 select = ["E", "W", "F", "B"]
-ignore = ["B028", "B905"]
+ignore = ["B028", "B905", "E501"]
 line-length = 99
 
 [tool.mypy]
