@@ -1,3 +1,4 @@
+import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -145,6 +146,11 @@ def main(args: Arguments, training_args: TrainingArguments):
         if training_args.save_strategy != "no":
             trainer.save_metrics("predict", result.metrics)
 
+        if trainer.is_world_process_zero():
+            output_file = Path(training_args.output_dir).joinpath("test_predictions.jsonl")
+            with open(output_file, mode="w") as f:
+                dump(f, raw_datasets["test"], predictions)
+
 
 class SpanClassificationTraier(Trainer):
     def __init__(self, *args, **kwargs):
@@ -209,6 +215,26 @@ def predict(logits, features, id2label):
             if idx != 0:
                 entities.add((start, end, id2label[idx]))
     return outputs
+
+
+def dump(writer, dataset, predictions):
+    encoder = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"))
+    for document in dataset:
+        outputs = []
+        for example in document["examples"]:
+            entities = sorted(predictions.get(example["id"], set()))
+            outputs.append(
+                {
+                    "id": example["id"],
+                    "text": example["text"],
+                    "entities": [
+                        {"start": start, "end": end, "label": label}
+                        for start, end, label in entities
+                    ],
+                }
+            )
+        writer.write(encoder.encode({"id": document["id"], "examples": outputs}))
+        writer.write("\n")
 
 
 if __name__ == "__main__":
